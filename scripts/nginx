@@ -1,0 +1,56 @@
+#!/bin/bash
+
+nginx_version=1.20.0
+export CURR_DIR=$(pwd)
+nginx_dir="$CURR_DIR/nginx"
+nginx_install_dir="$CURR_DIR/nginx/install"
+nginx_sbin_dir="$CURR_DIR/nginx/install/sbin"
+nginx_conf_dir="$CURR_DIR/nginx/install/conf"
+nginx_log_dir="$CURR_DIR/nginx/install/log"
+nginx_lock_dir="$CURR_DIR/nginx/install/lock"
+nginx_run_dir="$CURR_DIR/nginx/install/run"
+nginx_modules_dir="$CURR_DIR/nginx/install/modules"
+
+ngx_http_limiter_module_dir="$CURR_DIR/nginx-limiter-module"
+
+download_url="http://nginx.org/download/nginx-$nginx_version.tar.gz"
+
+rm -rf $nginx_dir/*
+
+mkdir -p $nginx_dir
+mkdir -p $nginx_install_dir
+mkdir -p $nginx_sbin_dir
+mkdir -p $nginx_conf_dir
+mkdir -p $nginx_log_dir
+mkdir -p $nginx_lock_dir
+mkdir -p $nginx_run_dir
+mkdir -p $nginx_modules_dir
+
+cp nginx.conf $nginx_conf_dir/nginx.conf
+touch $nginx_log_dir/access.log
+touch $nginx_log_dir/error.log
+touch $nginx_lock_dir/nginx.lock
+touch $nginx_run_dir/nginx.pid
+
+cd $nginx_dir
+
+wget -c $download_url -O - | tar -zxf-
+cd nginx*
+
+./configure \
+    --prefix=$nginx_install_dir \
+    --sbin-path=$nginx_sbin_dir \
+    --conf-path=$nginx_conf_dir/nginx.conf \
+    --http-log-path=$nginx_log_dir/access.log \
+    --error-log-path=$nginx_log_dir/error.log --with-pcre  \
+    --lock-path=$nginx_lock_dir/nginx.lock \
+    --pid-path=$nginx_run_dir/nginx.pid --with-http_ssl_module \
+    --with-http_image_filter_module=dynamic \
+    --modules-path=$nginx_modules_dir \
+    --with-http_v2_module \
+    --with-stream=dynamic \
+    --with-http_addition_module --with-http_mp4_module \
+    --add-module=$ngx_http_limiter_module_dir
+    
+make
+make install

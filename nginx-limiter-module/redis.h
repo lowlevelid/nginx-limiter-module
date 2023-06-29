@@ -46,14 +46,21 @@ THE SOFTWARE.
 #define REDIS_AUTH_REQUIRED "-NOAUTH Authentication required."
 #define REDIS_AUTH_INVALID "-WRONGPASS invalid username-password pair or user is disabled."
 #define REDIS_REPLY_EXPIRE_OK ":1"
-#define REDIS_REPLY_EXPIRE_OK ":1"
 #define REDIS_REPLY_GET_EMPTY "$-1"
 #define REDIS_REPLY_GET_OK "$1"
+
+// event handler
+typedef void (*redis_on_success) (void*);
+typedef void (*redis_on_error) (int);
 
 struct redis {
     int redis_fd;
     struct addrinfo* service_info;
     int authenticated;
+    redis_on_success on_connect_success;
+    redis_on_error on_connect_error;
+    redis_on_success on_auth_success;
+    redis_on_error on_auth_error;
 };
 
 struct redis_reply {
@@ -65,7 +72,14 @@ struct redis_reply {
 typedef struct redis_reply* redis_reply_t;
 typedef struct redis* redis_t;
 
-redis_t redis_connect(const char* host, const char* port, char* password, int db);
+redis_t redis_connect(const char* host, 
+    const char* port, 
+    char* password, 
+    int db, 
+    redis_on_success on_connect_success,
+    redis_on_error on_connect_error,
+    redis_on_success on_auth_success,
+    redis_on_error on_auth_error);
 void redis_close(redis_t r);
 redis_reply_t redis_send_command(redis_t r, char* command);
 void redis_reply_free(redis_reply_t reply);
@@ -74,7 +88,14 @@ int split_reply(char* line, char* delim, char** out, int* index_size);
 char* to_lower(char* s);
 char* to_upper(char* s);
 
-redis_t redis_connect(const char* host, const char* port, char* password, int db) {
+redis_t redis_connect(const char* host, 
+    const char* port, 
+    char* password, 
+    int db, 
+    redis_on_success on_connect_success,
+    redis_on_error on_connect_error,
+    redis_on_success on_auth_success,
+    redis_on_error on_auth_error) {
     redis_t r = (redis_t) malloc(sizeof(*r));
     if (r == NULL) {
         return NULL;
@@ -82,6 +103,10 @@ redis_t redis_connect(const char* host, const char* port, char* password, int db
 
     r->redis_fd = -1;
     r->authenticated = -1;
+    r->on_auth_error = on_auth_error;
+    r->on_auth_success = on_auth_success;
+    r->on_connect_error = on_connect_error;
+    r->on_connect_success = on_connect_success;
 
     int fd;
     struct addrinfo hints, *addr_info_p;
@@ -91,7 +116,12 @@ redis_t redis_connect(const char* host, const char* port, char* password, int db
     hints.ai_socktype = SOCK_STREAM;
     hints.ai_flags = AI_PASSIVE;
 
-    int address_info = getaddrinfo(host, port, &hints, &addr_info_p);
+    int address_info = getaddrinfo(
+        host, 
+        port, 
+        &hints, 
+        &addr_info_p);
+
     if (address_info < 0) {
         redis_close(r);
         return NULL;
@@ -99,14 +129,31 @@ redis_t redis_connect(const char* host, const char* port, char* password, int db
 
     fd = socket(AF_INET, SOCK_STREAM, 0);
     if (fd < 0) {
+        if (r->on_connect_error != NULL) {
+            r->on_connect_error(fd);
+        }
+
         redis_close(r);
         return NULL;
     }
 
-    int connected = connect(fd, addr_info_p->ai_addr, addr_info_p->ai_addrlen);
+    int connected = connect(
+        fd, 
+        addr_info_p->ai_addr, 
+        addr_info_p->ai_addrlen);
+
     if (connected < 0) {
+        if (r->on_connect_error != NULL) {
+            r->on_connect_error(connected);
+        }
+
         redis_close(r);
         return NULL;
+    }
+
+    // on connect succeed
+    if (r->on_connect_success != NULL) {
+        r->on_connect_success(NULL);
     }
 
     // set file descriptor
@@ -125,14 +172,26 @@ redis_t redis_connect(const char* host, const char* port, char* password, int db
         // send auth command
         redis_reply_t auth_reply = redis_send_command(r, auth_command);
         if (auth_reply == NULL) {
+            if (r->on_auth_error != NULL) {
+                r->on_auth_error(-1);
+            }
+
             printf("redis_send_command error \n");
             r->authenticated = -1;
         } else {
-            printf("redis reply: %s\n", auth_reply->reply);
-            printf("redis reply OK? %d\n", strcmp(REDIS_REPLY_OK, auth_reply->reply));
-            printf("redis reply INVALID? %d\n", strcmp(REDIS_AUTH_INVALID, auth_reply->reply));
+            printf("redis reply: %s\n", 
+                auth_reply->reply);
+            printf("redis reply OK? %d\n", 
+                strcmp(REDIS_REPLY_OK, auth_reply->reply));
+            printf("redis reply INVALID? %d\n", 
+                strcmp(REDIS_AUTH_INVALID, auth_reply->reply));
             if (strcmp(REDIS_REPLY_OK, auth_reply->reply) == 0) {
                 r->authenticated = 1;
+
+                // on auth succeed
+                if (r->on_auth_success != NULL) {
+                    r->on_auth_success((void*) &r->authenticated);
+                }
 
                 // if db greater than 0, then select db
                 if (db > 0) {
@@ -155,7 +214,8 @@ redis_t redis_connect(const char* host, const char* port, char* password, int db
                         if (select_reply == NULL) {
                             printf("redis_send_command error \n");
                         } else {
-                            printf("redis select reply OK? %d\n", strcmp(REDIS_REPLY_OK, select_reply->reply));
+                            printf("redis select reply OK? %d\n", 
+                                strcmp(REDIS_REPLY_OK, select_reply->reply));
                         }
 
                         redis_reply_free(select_reply);
@@ -179,7 +239,8 @@ redis_reply_t redis_send_command(redis_t r, char* command) {
     sprintf(base_command, "%s\r\n", command);
 
     // send data to active socket
-    int sent = send(r->redis_fd, (void*) base_command, strlen(base_command), 0);
+    int sent = send(r->redis_fd, 
+        (void*) base_command, strlen(base_command), 0);
     if (sent < 0) {
         return NULL;
     }
@@ -202,7 +263,8 @@ redis_reply_t redis_send_command(redis_t r, char* command) {
         return NULL;
     }
 
-    split_reply(reply, "\r\n", r_reply->reply_arr, &r_reply->reply_arr_size);
+    split_reply(reply, "\r\n", 
+        r_reply->reply_arr, &r_reply->reply_arr_size);
     
     printf("r_reply->reply_arr_size %d\n", r_reply->reply_arr_size);
 

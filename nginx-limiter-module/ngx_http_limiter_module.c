@@ -57,6 +57,8 @@ static ngx_int_t ngx_http_limiter_handler(ngx_http_request_t* r);
 static ngx_int_t ngx_http_limiter_preconf(ngx_conf_t *cf);
 static ngx_int_t ngx_http_limiter_postconf(ngx_conf_t *cf);
 
+static void on_auth_success(void*);
+
 // module directive
 static ngx_command_t ngx_http_limiter_commands[] = {
     {
@@ -202,7 +204,8 @@ static ngx_int_t ngx_http_limiter_handler(ngx_http_request_t* r) {
 
     char* data = ngx_palloc(r->pool, sizeof(*data) * 6);
     if (data == NULL) {
-        ngx_log_error(NGX_LOG_ERR, r->connection->log, 0, "failed to allocate data response");
+        ngx_log_error(NGX_LOG_ERR, r->connection->log, 0, 
+            "failed to allocate data response");
         return NGX_HTTP_INTERNAL_SERVER_ERROR;
     }
 
@@ -228,7 +231,7 @@ static ngx_int_t ngx_http_limiter_handler(ngx_http_request_t* r) {
     redis_t redis = redis_connect((char*) limiter_srv_conf->host.data, 
         (char*) limiter_srv_conf->port.data, 
         (char*) limiter_srv_conf->pass.data,
-        limiter_srv_conf->db);
+        limiter_srv_conf->db, NULL, NULL, on_auth_success, NULL);
     if (redis == NULL) {
         ngx_log_error(NGX_LOG_ERR, r->connection->log, 0, "redis init failed");
 
@@ -239,7 +242,7 @@ static ngx_int_t ngx_http_limiter_handler(ngx_http_request_t* r) {
         return NGX_HTTP_INTERNAL_SERVER_ERROR;
     }
 
-    printf("redis authenticated: %d\n", redis->authenticated);
+    // printf("redis authenticated: %d\n", redis->authenticated);
 
     // limiter
 
@@ -314,7 +317,8 @@ static ngx_int_t ngx_http_limiter_handler(ngx_http_request_t* r) {
                 printf("redis_send_command error \n");
             } else {
                 printf("redis expire reply %s\n", expire_reply->reply);
-                printf("redis expire reply OK? %d\n", strcmp(REDIS_REPLY_EXPIRE_OK, expire_reply->reply));
+                printf("redis expire reply OK? %d\n", 
+                    strcmp(REDIS_REPLY_EXPIRE_OK, expire_reply->reply));
             }
 
             redis_reply_free(expire_reply);
@@ -394,4 +398,9 @@ static char* ngx_http_limiter_merge_srv_conf(ngx_conf_t* cf, void* parent, void*
     }
 
     return NGX_CONF_OK;
+}
+
+static void on_auth_success(void* v) {
+    int d = *((int*) v);
+    printf("on_auth_success %d\n", d);
 }

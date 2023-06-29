@@ -2,6 +2,8 @@
 
 Experimental Nginx Rate Limit Module
 
+[![Nginx HTTP Limiter module CI](https://github.com/lowlevelid/nginx-limiter-module/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/lowlevelid/nginx-limiter-module/actions/workflows/ci.yml)
+
 #### Update and Install Dependencies for NGINX
 
 - install development libraries along with source code compilers.

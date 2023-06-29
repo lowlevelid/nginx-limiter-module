@@ -1,6 +1,6 @@
 ### Nginx Rate Limiter
 
-Nginx Rate Limit Experimental Module
+Experimental Nginx Rate Limit Module
 
 #### Update and Install Dependencies for NGINX
 

@@ -42,6 +42,9 @@ struct ngx_http_limiter_srv_conf_s {
 
     // limiter maximum
     ngx_uint_t max;
+
+    // limit expired in seconds
+    ngx_uint_t limit_expired;
 };
 
 typedef struct ngx_http_limiter_srv_conf_s ngx_http_limiter_srv_conf_t;
@@ -102,12 +105,22 @@ static ngx_command_t ngx_http_limiter_commands[] = {
         NULL,
     },
     {
-        ngx_string("limiter_redis_max"), // directive
+        ngx_string("limiter_max"), // directive
         NGX_HTTP_MAIN_CONF|NGX_HTTP_SRV_CONF|NGX_CONF_TAKE1,
 
         ngx_conf_set_num_slot, // configuration setup function
         NGX_HTTP_SRV_CONF_OFFSET,
         offsetof(ngx_http_limiter_srv_conf_t, max),
+        NULL,
+    },
+
+    {
+        ngx_string("limiter_expired"), // directive
+        NGX_HTTP_MAIN_CONF|NGX_HTTP_SRV_CONF|NGX_CONF_TAKE1,
+
+        ngx_conf_set_num_slot, // configuration setup function
+        NGX_HTTP_SRV_CONF_OFFSET,
+        offsetof(ngx_http_limiter_srv_conf_t, limit_expired),
         NULL,
     },
     ngx_null_command // command termination
@@ -159,6 +172,7 @@ static ngx_int_t ngx_http_limiter_handler(ngx_http_request_t* r) {
     printf("limiter_srv_conf pass: %s\n", (const char*) limiter_srv_conf->pass.data);
     printf("limiter_srv_conf db: %ld\n", limiter_srv_conf->db);
     printf("limiter_srv_conf max: %ld\n", limiter_srv_conf->max);
+    printf("limiter_srv_conf expired: %ld\n", limiter_srv_conf->limit_expired);
 
     // get user agent
     ngx_str_t user_agent = r->headers_in.user_agent->value;
@@ -166,15 +180,9 @@ static ngx_int_t ngx_http_limiter_handler(ngx_http_request_t* r) {
     printf("user-agent: %s\n", user_agent.data);
     printf("user-agent-len: %ld\n", user_agent.len);
 
-    printf("method: %ld\n", r->method);
-    printf("method name: %s\n", (const char*) r->method_name.data);
-    if (!(r->method & NGX_HTTP_GET)) {
-        return NGX_HTTP_NOT_ALLOWED;
-    }
-
     printf("x_forwarded_for N: %ld\n", r->headers_in.x_forwarded_for.nelts);
 
-    char client_ipstr[INET6_ADDRSTRLEN];
+    char client_ipstr[INET_ADDRSTRLEN];
     inet_ntop(r->connection->sockaddr->sa_family, r->connection->sockaddr, 
         client_ipstr, sizeof(client_ipstr));
     printf("user: %s\n", client_ipstr);
@@ -218,12 +226,96 @@ static ngx_int_t ngx_http_limiter_handler(ngx_http_request_t* r) {
 
     // redis
     struct redis* redis = redis_connect((char*) limiter_srv_conf->host.data, 
-        (char*) limiter_srv_conf->port.data, (char*) limiter_srv_conf->pass.data);
+        (char*) limiter_srv_conf->port.data, 
+        (char*) limiter_srv_conf->pass.data,
+        limiter_srv_conf->db);
     if (redis == NULL) {
         printf("redis init failed\n");
     }
 
     printf("redis authenticated: %d\n", redis->authenticated);
+
+    // limiter
+
+    char base_get_command[6+sizeof(client_ipstr)] = "GET %s";
+    char get_command[sizeof(base_get_command)];
+
+    sprintf(get_command, base_get_command, client_ipstr);
+    get_command[sizeof(get_command)-1] = 0x0;
+    printf("get_command text length %ld \n", sizeof(get_command));
+    printf("get_command text %s\n", get_command);
+
+    // send set command
+    redis_reply_t get_reply = redis_send_command(redis, get_command);
+    if (get_reply == NULL) {
+        printf("redis_send_command error \n");
+    } else {
+        printf("---------------------------------------------------\n");
+        printf("redis get reply %s\n", get_reply->reply);
+        printf("redis get reply OK? %d\n", strcmp(REDIS_REPLY_GET_OK, get_reply->reply));
+        if (get_reply->reply_arr_size > 1) {
+            printf("redis get reply[0] %s\n", get_reply->reply_arr[0]);
+
+            int available_limit = atoi(get_reply->reply_arr[1]);
+            int max = (int) limiter_srv_conf->max;
+            printf("redis get reply[1] %d v %d\n", available_limit, max);
+
+            if (available_limit > max) {
+                printf("available_limit greater than %d\n", max);
+                redis_reply_free(get_reply);
+                redis_close(redis);
+
+                r->headers_out.status = NGX_HTTP_TOO_MANY_REQUESTS;
+                r->headers_out.content_length_n = sizeof(json_resp) - 1;
+
+                ngx_http_send_header(r); // send headers
+                return NGX_HTTP_TOO_MANY_REQUESTS;
+            }
+        }
+    }
+
+    redis_reply_free(get_reply);
+
+    char base_incr_command[7+sizeof(client_ipstr)] = "INCR %s";
+    char incr_command[sizeof(base_incr_command)];
+
+    sprintf(incr_command, base_incr_command, client_ipstr);
+    incr_command[sizeof(incr_command)-1] = 0x0;
+    printf("incr_command text length %ld \n", sizeof(incr_command));
+    printf("incr_command text %s\n", incr_command);
+
+    // send set command
+    redis_reply_t incr_reply = redis_send_command(redis, incr_command);
+    if (incr_reply == NULL) {
+        printf("redis_send_command error \n");
+    } else {
+        printf("redis incr reply %s\n", incr_reply->reply);
+
+        // if incr command return 1, set expiry
+        if (strcmp(":1", incr_reply->reply) == 0) {
+            char base_expire_command[12+sizeof(client_ipstr)+2] = "EXPIRE %s %u";
+            char expire_command[sizeof(base_expire_command)];
+
+            unsigned char expire_in_seconds = (unsigned char) limiter_srv_conf->limit_expired;
+            sprintf(expire_command, base_expire_command, client_ipstr, expire_in_seconds);
+            expire_command[sizeof(expire_command)-1] = 0x0;
+            printf("expire_command text length %ld \n", sizeof(expire_command));
+            printf("expire_command text %s\n", expire_command);
+
+            // send set command
+            redis_reply_t expire_reply = redis_send_command(redis, expire_command);
+            if (expire_reply == NULL) {
+                printf("redis_send_command error \n");
+            } else {
+                printf("redis expire reply %s\n", expire_reply->reply);
+                printf("redis expire reply OK? %d\n", strcmp(REDIS_REPLY_EXPIRE_OK, expire_reply->reply));
+            }
+
+            redis_reply_free(expire_reply);
+        }
+    }
+
+    redis_reply_free(incr_reply);
 
     redis_close(redis);
 
@@ -265,6 +357,7 @@ static void* ngx_http_limiter_create_srv_conf(ngx_conf_t* cf) {
 
     conf->db = NGX_CONF_UNSET_UINT;
     conf->max = NGX_CONF_UNSET_UINT;
+    conf->limit_expired = NGX_CONF_UNSET_UINT;
 
     return conf;
 }
@@ -282,9 +375,15 @@ static char* ngx_http_limiter_merge_srv_conf(ngx_conf_t* cf, void* parent, void*
     
     ngx_conf_merge_uint_value(conf->db, prev->db, 0);
     ngx_conf_merge_uint_value(conf->max, prev->max, 1);
+    ngx_conf_merge_uint_value(conf->max, prev->limit_expired, 1);
 
     if (conf->max < 1) {
-        ngx_conf_log_error(NGX_LOG_ERR, cf, 0, "limiter max config must bre greater than 0");
+        ngx_conf_log_error(NGX_LOG_ERR, cf, 0, "limiter max config must bre greater than 1");
+        return NGX_CONF_ERROR;
+    }
+
+    if (conf->limit_expired < 1) {
+        ngx_conf_log_error(NGX_LOG_ERR, cf, 0, "limiter expired config must bre greater than 1");
         return NGX_CONF_ERROR;
     }
 

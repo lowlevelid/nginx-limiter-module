@@ -225,7 +225,7 @@ static ngx_int_t ngx_http_limiter_handler(ngx_http_request_t* r) {
     ngx_http_send_header(r); // send headers
 
     // redis
-    struct redis* redis = redis_connect((char*) limiter_srv_conf->host.data, 
+    redis_t redis = redis_connect((char*) limiter_srv_conf->host.data, 
         (char*) limiter_srv_conf->port.data, 
         (char*) limiter_srv_conf->pass.data,
         limiter_srv_conf->db);

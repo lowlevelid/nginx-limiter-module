@@ -63,18 +63,19 @@ struct redis_reply {
 };
 
 typedef struct redis_reply* redis_reply_t;
+typedef struct redis* redis_t;
 
-struct redis* redis_connect(const char* host, const char* port, char* password, int db);
-void redis_close(struct redis* r);
-redis_reply_t redis_send_command(struct redis* r, char* command);
+redis_t redis_connect(const char* host, const char* port, char* password, int db);
+void redis_close(redis_t r);
+redis_reply_t redis_send_command(redis_t r, char* command);
 void redis_reply_free(redis_reply_t reply);
 
 int split_reply(char* line, char* delim, char** out, int* index_size);
 char* to_lower(char* s);
 char* to_upper(char* s);
 
-struct redis* redis_connect(const char* host, const char* port, char* password, int db) {
-    struct redis* r = (struct redis*) malloc(sizeof(*r));
+redis_t redis_connect(const char* host, const char* port, char* password, int db) {
+    redis_t r = (redis_t) malloc(sizeof(*r));
     if (r == NULL) {
         return NULL;
     }
@@ -169,7 +170,7 @@ struct redis* redis_connect(const char* host, const char* port, char* password, 
     return r;
 }
 
-struct redis_reply* redis_send_command(struct redis* r, char* command) {
+redis_reply_t redis_send_command(redis_t r, char* command) {
     if (r == NULL || r->redis_fd < 0) {
         return NULL;
     }
@@ -232,7 +233,7 @@ void redis_reply_free(redis_reply_t reply) {
     }
 }
 
-void redis_close(struct redis* r) {
+void redis_close(redis_t r) {
     if (r != NULL) {
         if (r->redis_fd > 0) {
             close(r->redis_fd);

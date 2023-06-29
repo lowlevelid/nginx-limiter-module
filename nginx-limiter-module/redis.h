@@ -39,12 +39,16 @@ THE SOFTWARE.
 // close()
 #include <unistd.h>
 
+// TODO: better parsing reply
 #define REDIS_ERROR -1
 #define REDIS_OK 0
 #define REDIS_REPLY_OK "+OK"
 #define REDIS_AUTH_REQUIRED "-NOAUTH Authentication required."
 #define REDIS_AUTH_INVALID "-WRONGPASS invalid username-password pair or user is disabled."
-#define REDIS_REPLY_ "-1"
+#define REDIS_REPLY_EXPIRE_OK ":1"
+#define REDIS_REPLY_EXPIRE_OK ":1"
+#define REDIS_REPLY_GET_EMPTY "$-1"
+#define REDIS_REPLY_GET_OK "$1"
 
 struct redis {
     int redis_fd;
@@ -54,6 +58,8 @@ struct redis {
 
 struct redis_reply {
     char* reply;
+    char** reply_arr;
+    int reply_arr_size;
 };
 
 typedef struct redis_reply* redis_reply_t;
@@ -62,6 +68,10 @@ struct redis* redis_connect(const char* host, const char* port, char* password, 
 void redis_close(struct redis* r);
 redis_reply_t redis_send_command(struct redis* r, char* command);
 void redis_reply_free(redis_reply_t reply);
+
+int split_reply(char* line, char* delim, char** out, int* index_size);
+char* to_lower(char* s);
+char* to_upper(char* s);
 
 struct redis* redis_connect(const char* host, const char* port, char* password, int db) {
     struct redis* r = (struct redis*) malloc(sizeof(*r));
@@ -127,8 +137,8 @@ struct redis* redis_connect(const char* host, const char* port, char* password, 
                 if (db > 0) {
                     printf("select redis db %u \n", (unsigned char) db);
 
-                    // unsigned char can be 3 bytes (0-255), so add 2 more memory space 
-                    // shoule be enough
+                    // unsigned char can be 3 bytes (0-255), 
+                    // so add 2 more memory space should be enough
                     char base_select_command[11] = "SELECT %u";
                     char select_command[sizeof(base_select_command)];
                     int n = sprintf(select_command, base_select_command, (unsigned char) db);
@@ -167,6 +177,7 @@ struct redis_reply* redis_send_command(struct redis* r, char* command) {
     char base_command[strlen(command) + 2];
     sprintf(base_command, "%s\r\n", command);
 
+    // send data to active socket
     int sent = send(r->redis_fd, (void*) base_command, strlen(base_command), 0);
     if (sent < 0) {
         return NULL;
@@ -174,12 +185,25 @@ struct redis_reply* redis_send_command(struct redis* r, char* command) {
 
     char reply[1024];
 
+    // read data to active socket
     int n = recv(r->redis_fd, reply, sizeof(reply), 0);
     if (n < 0) {
         return NULL;
     }
 
     struct redis_reply* r_reply = (struct redis_reply*) malloc(sizeof(*r_reply));
+    if (r_reply == NULL) {
+        return NULL;
+    }
+
+    r_reply->reply_arr = (char**) malloc(2 * sizeof(char*));
+    if (r_reply->reply_arr == NULL) {
+        return NULL;
+    }
+
+    split_reply(reply, "\r\n", r_reply->reply_arr, &r_reply->reply_arr_size);
+    
+    printf("r_reply->reply_arr_size %d\n", r_reply->reply_arr_size);
 
     // remove garbage, read only the necessary data
     int read_to = 0;
@@ -202,6 +226,7 @@ struct redis_reply* redis_send_command(struct redis* r, char* command) {
 
 void redis_reply_free(redis_reply_t reply) {
     if (reply != NULL) {
+        free((void*) reply->reply_arr);
         free((void*) reply->reply);
         free((void*) reply);
     }
@@ -216,6 +241,34 @@ void redis_close(struct redis* r) {
         freeaddrinfo(r->service_info);
         free((void*) r);
     }
+}
+
+int split_reply(char* line, char* delim, char** out, int* index_size) {
+    char* conf_token = strtok(line, delim);
+    int index = 0;
+    while (conf_token != NULL) {
+        // we only need two line for now
+        if (index > 1) break;
+
+        out[index] = conf_token;
+        conf_token = strtok(NULL, delim);
+        index++;
+    }
+    
+    if (index_size != NULL)
+        *index_size = index;
+
+    return 0;
+}
+
+char* to_lower(char* s) {
+    for(char* p=s; *p; p++) *p=tolower(*p);
+    return s;
+}
+
+char* to_upper(char* s) {
+    for(char* p=s; *p; p++) *p=toupper(*p);
+    return s;
 }
 
 #endif

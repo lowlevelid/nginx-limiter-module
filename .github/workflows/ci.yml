@@ -1,0 +1,38 @@
+name: Nginx HTTP Limiter module CI
+
+on:
+  push:
+    branches: [ master ]
+  pull_request:
+    branches: [ master ]
+
+jobs:
+  build:
+
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+
+    steps:
+      - uses: actions/checkout@v2
+
+      - name: Set permission to install_ubuntu_deps
+        run: chmod +x ./scripts/install_ubuntu_deps
+
+      - name: Install Ubuntu dependecies
+        run: bash ./scripts/install_ubuntu_deps
+
+      - name: Set permission to nginx
+        run: chmod +x ./scripts/nginx
+
+      - name: Check Builder
+        run: |
+          cmake --version
+          gcc --version
+
+      - name: Build Project
+        run: bash ./scripts/nginx
+      
+      - name: Validate Nginx
+        run: ./nginx/install/sbin/nginx -t

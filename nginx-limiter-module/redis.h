@@ -42,6 +42,9 @@ THE SOFTWARE.
 #define REDIS_ERROR -1
 #define REDIS_OK 0
 #define REDIS_REPLY_OK "+OK"
+#define REDIS_AUTH_REQUIRED "-NOAUTH Authentication required."
+#define REDIS_AUTH_INVALID "-WRONGPASS invalid username-password pair or user is disabled."
+#define REDIS_REPLY_ "-1"
 
 struct redis {
     int redis_fd;
@@ -55,12 +58,12 @@ struct redis_reply {
 
 typedef struct redis_reply* redis_reply_t;
 
-struct redis* redis_connect(const char* host, const char* port, char* password);
+struct redis* redis_connect(const char* host, const char* port, char* password, int db);
 void redis_close(struct redis* r);
 redis_reply_t redis_send_command(struct redis* r, char* command);
 void redis_reply_free(redis_reply_t reply);
 
-struct redis* redis_connect(const char* host, const char* port, char* password) {
+struct redis* redis_connect(const char* host, const char* port, char* password, int db) {
     struct redis* r = (struct redis*) malloc(sizeof(*r));
     if (r == NULL) {
         return NULL;
@@ -101,15 +104,53 @@ struct redis* redis_connect(const char* host, const char* port, char* password) 
 
     // send auth command
     if (strlen(password) > 0) {
+        char base_auth_command[7] = "AUTH %s";
+        char auth_command[sizeof(base_auth_command)+strlen(password)-1];
+        sprintf(auth_command, base_auth_command, password);
+        auth_command[sizeof(auth_command)-1] = 0x0;
+        printf("auth_command text length %ld \n", sizeof(auth_command));
+        printf("auth_command text %s\n", auth_command);
+
         // send auth command
-        redis_reply_t auth_reply = redis_send_command(r, "AUTH devpass");
+        redis_reply_t auth_reply = redis_send_command(r, auth_command);
         if (auth_reply == NULL) {
             printf("redis_send_command error \n");
             r->authenticated = -1;
         } else {
             printf("redis reply: %s\n", auth_reply->reply);
             printf("redis reply OK? %d\n", strcmp(REDIS_REPLY_OK, auth_reply->reply));
-            r->authenticated = 1;
+            printf("redis reply INVALID? %d\n", strcmp(REDIS_AUTH_INVALID, auth_reply->reply));
+            if (strcmp(REDIS_REPLY_OK, auth_reply->reply) == 0) {
+                r->authenticated = 1;
+
+                // if db greater than 0, then select db
+                if (db > 0) {
+                    printf("select redis db %u \n", (unsigned char) db);
+
+                    // unsigned char can be 3 bytes (0-255), so add 2 more memory space 
+                    // shoule be enough
+                    char base_select_command[11] = "SELECT %u";
+                    char select_command[sizeof(base_select_command)];
+                    int n = sprintf(select_command, base_select_command, (unsigned char) db);
+                    if (n < 0) {
+                        printf("format select command error %d\n", n);
+                    } else {
+                        select_command[sizeof(select_command)-1] = 0x0;
+                        printf("select_command text length %ld \n", sizeof(select_command));
+                        printf("select_command text %s\n", select_command);
+
+                        // send select command
+                        redis_reply_t select_reply = redis_send_command(r, select_command);
+                        if (select_reply == NULL) {
+                            printf("redis_send_command error \n");
+                        } else {
+                            printf("redis select reply OK? %d\n", strcmp(REDIS_REPLY_OK, select_reply->reply));
+                        }
+
+                        redis_reply_free(select_reply);
+                    }
+                }
+            }
         }
 
         redis_reply_free(auth_reply);

@@ -41,10 +41,12 @@ THE SOFTWARE.
 
 #define REDIS_ERROR -1
 #define REDIS_OK 0
+#define REDIS_REPLY_OK "+OK"
 
 struct redis {
     int redis_fd;
     struct addrinfo* service_info;
+    int authenticated;
 };
 
 struct redis_reply {
@@ -65,6 +67,7 @@ struct redis* redis_connect(const char* host, const char* port, char* password) 
     }
 
     r->redis_fd = -1;
+    r->authenticated = -1;
 
     int fd;
     struct addrinfo hints, *addr_info_p;
@@ -95,6 +98,22 @@ struct redis* redis_connect(const char* host, const char* port, char* password) 
     // set file descriptor
     r->redis_fd = fd;
     r->service_info = addr_info_p;
+
+    // send auth command
+    if (strlen(password) > 0) {
+        // send auth command
+        redis_reply_t auth_reply = redis_send_command(r, "AUTH devpass");
+        if (auth_reply == NULL) {
+            printf("redis_send_command error \n");
+            r->authenticated = -1;
+        } else {
+            printf("redis reply: %s\n", auth_reply->reply);
+            printf("redis reply OK? %d\n", strcmp(REDIS_REPLY_OK, auth_reply->reply));
+            r->authenticated = 1;
+        }
+
+        redis_reply_free(auth_reply);
+    }
 
     return r;
 }

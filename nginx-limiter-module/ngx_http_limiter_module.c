@@ -230,7 +230,13 @@ static ngx_int_t ngx_http_limiter_handler(ngx_http_request_t* r) {
         (char*) limiter_srv_conf->pass.data,
         limiter_srv_conf->db);
     if (redis == NULL) {
-        printf("redis init failed\n");
+        ngx_log_error(NGX_LOG_ERR, r->connection->log, 0, "redis init failed");
+
+        r->headers_out.status = NGX_HTTP_INTERNAL_SERVER_ERROR;
+        r->headers_out.content_length_n = sizeof(json_resp) - 1;
+
+        ngx_http_send_header(r); // send headers
+        return NGX_HTTP_INTERNAL_SERVER_ERROR;
     }
 
     printf("redis authenticated: %d\n", redis->authenticated);

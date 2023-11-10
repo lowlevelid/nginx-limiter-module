@@ -202,30 +202,12 @@ static ngx_int_t ngx_http_limiter_handler(ngx_http_request_t* r) {
     out.buf = buf;
     out.next = NULL;
 
-    char* data = ngx_palloc(r->pool, sizeof(*data) * 6);
-    if (data == NULL) {
-        ngx_log_error(NGX_LOG_ERR, r->connection->log, 0, 
-            "failed to allocate data response");
-        return NGX_HTTP_INTERNAL_SERVER_ERROR;
-    }
-
-    data = "hello";
-
-    char base_resp[32] = "{\"success\": true, \"data\": \"\%s\"}";
-    char json_resp[35];
-
-    sprintf(json_resp, base_resp, data);
-    json_resp[34] = 0x0;
-
-    buf->pos = (u_char*) json_resp; // first position in memory of the data
-    buf->last = (u_char*) json_resp + sizeof(json_resp) - 1; // last position in memory of the data
-    buf->memory = 1; // read only memory
-    buf->last_buf = 1; // will no more buffers in the request
-
-    r->headers_out.status = NGX_HTTP_OK;
-    r->headers_out.content_length_n = sizeof(json_resp) - 1;
-
-    ngx_http_send_header(r); // send headers
+    // char* data = ngx_palloc(r->pool, sizeof(*data) * 6);
+    // if (data == NULL) {
+    //     ngx_log_error(NGX_LOG_ERR, r->connection->log, 0, 
+    //         "failed to allocate data response");
+    //     return NGX_HTTP_INTERNAL_SERVER_ERROR;
+    // }
 
     // redis
     redis_t redis = redis_connect((char*) limiter_srv_conf->host.data, 
@@ -235,10 +217,30 @@ static ngx_int_t ngx_http_limiter_handler(ngx_http_request_t* r) {
     if (redis == NULL) {
         ngx_log_error(NGX_LOG_ERR, r->connection->log, 0, "redis init failed");
 
+        char* error_data = ngx_palloc(r->pool, sizeof(*error_data) * 15);
+        if (error_data == NULL) {
+            ngx_log_error(NGX_LOG_ERR, r->connection->log, 0, 
+                "failed to allocate error_data response");
+            return NGX_HTTP_INTERNAL_SERVER_ERROR;
+        }
+
+        error_data = "internal error";
+        char base_resp_error[33] = "{\"success\": false, \"data\": \"\%s\"}";
+        char json_resp_error[45];
+
+        sprintf(json_resp_error, base_resp_error, error_data);
+        json_resp_error[44] = 0x0;
+
+        buf->pos = (u_char*) json_resp_error; // first position in memory of the data
+        buf->last = (u_char*) json_resp_error + sizeof(json_resp_error) - 1; // last position in memory of the data
+        buf->memory = 1; // read only memory
+        buf->last_buf = 1; // will no more buffers in the request
+
         r->headers_out.status = NGX_HTTP_INTERNAL_SERVER_ERROR;
-        r->headers_out.content_length_n = sizeof(json_resp) - 1;
+        r->headers_out.content_length_n = sizeof(json_resp_error) - 1;
 
         ngx_http_send_header(r); // send headers
+        ngx_http_output_filter(r, &out);
         return NGX_HTTP_INTERNAL_SERVER_ERROR;
     }
 
@@ -274,15 +276,36 @@ static ngx_int_t ngx_http_limiter_handler(ngx_http_request_t* r) {
                 redis_reply_free(get_reply);
                 redis_close(redis);
 
+                char* error_data = ngx_palloc(r->pool, sizeof(*error_data) * 34);
+                if (error_data == NULL) {
+                    ngx_log_error(NGX_LOG_ERR, r->connection->log, 0, 
+                        "failed to allocate error_data response");
+                    return NGX_HTTP_INTERNAL_SERVER_ERROR;
+                }
+
+                error_data = "too many request, try again later";
+                char base_resp_error[33] = "{\"success\": false, \"data\": \"\%s\"}";
+                char json_resp_error[64];
+
+                sprintf(json_resp_error, base_resp_error, error_data);
+                json_resp_error[63] = 0x0;
+
+                buf->pos = (u_char*) json_resp_error; // first position in memory of the data
+                buf->last = (u_char*) json_resp_error + sizeof(json_resp_error) - 1; // last position in memory of the data
+                buf->memory = 1; // read only memory
+                buf->last_buf = 1; // will no more buffers in the request
+                
                 r->headers_out.status = NGX_HTTP_TOO_MANY_REQUESTS;
-                r->headers_out.content_length_n = sizeof(json_resp) - 1;
+                r->headers_out.content_length_n = sizeof(json_resp_error) - 1;
 
                 ngx_http_send_header(r); // send headers
+                ngx_http_output_filter(r, &out);
                 return NGX_HTTP_TOO_MANY_REQUESTS;
             }
         }
     }
 
+    //  too many requests
     redis_reply_free(get_reply);
 
     char base_incr_command[7+sizeof(client_ipstr)] = "INCR %s";
@@ -329,6 +352,30 @@ static ngx_int_t ngx_http_limiter_handler(ngx_http_request_t* r) {
 
     redis_close(redis);
 
+    // send OK response
+    char* data = ngx_palloc(r->pool, sizeof(*data) * 6);
+    if (data == NULL) {
+        ngx_log_error(NGX_LOG_ERR, r->connection->log, 0, 
+            "failed to allocate data response");
+        return NGX_HTTP_INTERNAL_SERVER_ERROR;
+    }
+
+    data = "hello";
+    char base_resp_success[32] = "{\"success\": true, \"data\": \"\%s\"}";
+    char json_resp_success[35];
+
+    sprintf(json_resp_success, base_resp_success, data);
+    json_resp_success[34] = 0x0;
+
+    buf->pos = (u_char*) json_resp_success; // first position in memory of the data
+    buf->last = (u_char*) json_resp_success + sizeof(json_resp_success) - 1; // last position in memory of the data
+    buf->memory = 1; // read only memory
+    buf->last_buf = 1; // will no more buffers in the request
+
+    r->headers_out.status = NGX_HTTP_OK;
+    r->headers_out.content_length_n = sizeof(json_resp_success) - 1;
+
+    ngx_http_send_header(r); // send headers
     return ngx_http_output_filter(r, &out);
 
 }

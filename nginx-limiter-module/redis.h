@@ -49,6 +49,10 @@ THE SOFTWARE.
 #define REDIS_REPLY_GET_EMPTY "$-1"
 #define REDIS_REPLY_GET_OK "$1"
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 // event handler
 typedef void (*redis_on_success) (void*);
 typedef void (*redis_on_error) (int);
@@ -87,6 +91,10 @@ void redis_reply_free(redis_reply_t reply);
 int split_reply(char* line, char* delim, char** out, int* index_size);
 char* to_lower(char* s);
 char* to_upper(char* s);
+
+#ifdef __cplusplus
+}
+#endif
 
 redis_t redis_connect(const char* host, 
     const char* port, 
